@@ -102,7 +102,7 @@ function concatenate(parts: Uint8Array[]): Uint8Array {
       encodeString("S0lana"),
       encodeString("S0L"),
       encodeString(METADATA_URI),
-      Uint8Array.of(0, 0, 0, 0, 0, 0, 1, 0),
+      Uint8Array.of(0, 0, 0, 0, 0, 1, 0),
     ]);
 
     const instruction = new TransactionInstruction({
