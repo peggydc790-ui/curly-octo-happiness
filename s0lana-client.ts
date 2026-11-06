@@ -1,12 +1,3 @@
-import {
-  PublicKey,
-  Transaction,
-  TransactionInstruction,
-  SystemProgram,
-  SYSVAR_RENT_PUBKEY,
-  sendAndConfirmTransaction,
-} from "@solana/web3.js";
-
 const EXPECTED_WALLET = "8oG2449sKgjVfUn9TR8rEuEvzea9SPaMp1orZCau2ifs";
 const MINT_ADDRESS = "F6ns4PHBs9mQjCRQj8bymJ3GsHNaLFsTHoYYDtUDH1Vi";
 const TOKEN_PROGRAM_ADDRESS = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
@@ -49,9 +40,9 @@ function concatenate(parts: Uint8Array[]): Uint8Array {
       throw new Error("Wrong Playground wallet. No transaction was sent.");
     }
 
-    const mint = new PublicKey(MINT_ADDRESS);
-    const tokenProgram = new PublicKey(TOKEN_PROGRAM_ADDRESS);
-    const metadataProgram = new PublicKey(METADATA_PROGRAM_ADDRESS);
+    const mint = new web3.PublicKey(MINT_ADDRESS);
+    const tokenProgram = new web3.PublicKey(TOKEN_PROGRAM_ADDRESS);
+    const metadataProgram = new web3.PublicKey(METADATA_PROGRAM_ADDRESS);
 
     console.log("Checking existing S0lana mint...");
     const mintAccount = await pg.connection.getParsedAccountInfo(mint, "confirmed");
@@ -80,7 +71,7 @@ function concatenate(parts: Uint8Array[]): Uint8Array {
       throw new Error("Hosted metadata does not match S0lana. No transaction was sent.");
     }
 
-    const [metadataPda, bump] = PublicKey.findProgramAddressSync(
+    const [metadataPda, bump] = web3.PublicKey.findProgramAddressSync(
       [
         new TextEncoder().encode("metadata"),
         metadataProgram.toBytes(),
@@ -108,7 +99,7 @@ function concatenate(parts: Uint8Array[]): Uint8Array {
       Uint8Array.of(0, 0, 0, 0, 0, 1, 0),
     ]);
 
-    const instruction = new TransactionInstruction({
+    const instruction = new web3.TransactionInstruction({
       programId: metadataProgram,
       keys: [
         { pubkey: metadataPda, isSigner: false, isWritable: true },
@@ -117,13 +108,13 @@ function concatenate(parts: Uint8Array[]): Uint8Array {
         { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
         // A PublicKey (not a Signer) is correct for the initial update authority.
         { pubkey: wallet.publicKey, isSigner: false, isWritable: false },
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
+        { pubkey: web3.SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: web3.SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
       ],
       data: instructionData,
     });
 
-    const transaction = new Transaction().add(instruction);
+    const transaction = new web3.Transaction().add(instruction);
     transaction.feePayer = wallet.publicKey;
     const latestBlockhash = await pg.connection.getLatestBlockhash("confirmed");
     transaction.recentBlockhash = latestBlockhash.blockhash;
@@ -151,7 +142,7 @@ function concatenate(parts: Uint8Array[]): Uint8Array {
     console.log("Approximate metadata rent (SOL):", rentLamports / 1_000_000_000);
     console.log("Submitting the simulated transaction to Devnet...");
 
-    const signature = await sendAndConfirmTransaction(
+    const signature = await web3.sendAndConfirmTransaction(
       pg.connection,
       transaction,
       [wallet],
