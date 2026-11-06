@@ -12,6 +12,7 @@ const MINT_ADDRESS = "F6ns4PHBs9mQjCRQj8bymJ3GsHNaLFsTHoYYDtUDH1Vi";
 const TOKEN_PROGRAM_ADDRESS = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const METADATA_PROGRAM_ADDRESS = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s";
 const METADATA_URI = "https://raw.githubusercontent.com/peggydc790-ui/curly-octo-happiness/main/metadata.json";
+const EXPECTED_IMAGE_CID = "bafybeiewkhrnv4uyzt26f6dz73563rczmpeajxxls2t6kevmziav3nbeeq";
 
 function encodeU32(value: number): Uint8Array {
   const out = new Uint8Array(4);
@@ -53,7 +54,7 @@ function concatenate(parts: Uint8Array[]): Uint8Array {
     const metadataProgram = new PublicKey(METADATA_PROGRAM_ADDRESS);
 
     console.log("Checking existing S0lana mint...");
-    const mintAccount = await pg.connection.getParsedAccountInfo(mint);
+    const mintAccount = await pg.connection.getParsedAccountInfo(mint, "confirmed");
     if (!mintAccount.value || !mintAccount.value.owner.equals(tokenProgram)) {
       throw new Error("The existing mint is not a classic SPL Token mint.");
     }
@@ -67,19 +68,19 @@ function concatenate(parts: Uint8Array[]): Uint8Array {
     }
 
     console.log("Checking hosted metadata JSON...");
-    const response = await fetch(METADATA_URI);
+    const response = await fetch(METADATA_URI, { cache: "no-store" });
     if (!response.ok) throw new Error("Could not load the hosted metadata JSON.");
     const json = await response.json();
     if (
       json.name !== "S0lana" ||
       json.symbol !== "S0L" ||
       typeof json.image !== "string" ||
-      !json.image.includes("bafybeiewkhrnv4uyzt26f6dz73563rczmpeajxxls2t6kevmziav3nbeeq")
+      !json.image.includes(EXPECTED_IMAGE_CID)
     ) {
       throw new Error("Hosted metadata does not match S0lana. No transaction was sent.");
     }
 
-    const [metadataPda] = PublicKey.findProgramAddressSync(
+    const [metadataPda, bump] = PublicKey.findProgramAddressSync(
       [
         new TextEncoder().encode("metadata"),
         metadataProgram.toBytes(),
@@ -87,16 +88,18 @@ function concatenate(parts: Uint8Array[]): Uint8Array {
       ],
       metadataProgram
     );
+    console.log("Metadata PDA:", metadataPda.toBase58());
+    console.log("PDA bump:", bump);
 
-    const existingMetadata = await pg.connection.getAccountInfo(metadataPda);
+    const existingMetadata = await pg.connection.getAccountInfo(metadataPda, "confirmed");
     if (existingMetadata) {
       console.log("Metadata account already exists:", metadataPda.toBase58());
       throw new Error("Metadata already exists. No transaction was sent.");
     }
 
-    // Metaplex CreateMetadataAccountV3 instruction (discriminator 33).
-    // DataV2: name, symbol, URI, seller fee 0, no creators, no collection,
-    // no uses; isMutable true; no collection details.
+    // CreateMetadataAccountV3 discriminator = 33.
+    // DataV2: name, symbol, URI, seller fee 0, creators=None,
+    // collection=None, uses=None; isMutable=true; collectionDetails=None.
     const instructionData = concatenate([
       Uint8Array.of(33),
       encodeString("S0lana"),
@@ -112,6 +115,7 @@ function concatenate(parts: Uint8Array[]): Uint8Array {
         { pubkey: mint, isSigner: false, isWritable: false },
         { pubkey: wallet.publicKey, isSigner: true, isWritable: false },
         { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
+        // A PublicKey (not a Signer) is correct for the initial update authority.
         { pubkey: wallet.publicKey, isSigner: false, isWritable: false },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
@@ -120,23 +124,55 @@ function concatenate(parts: Uint8Array[]): Uint8Array {
     });
 
     const transaction = new Transaction().add(instruction);
-    console.log("All checks passed. Sending metadata registration transaction on Devnet...");
+    transaction.feePayer = wallet.publicKey;
+    const latestBlockhash = await pg.connection.getLatestBlockhash("confirmed");
+    transaction.recentBlockhash = latestBlockhash.blockhash;
+    transaction.sign(wallet);
+
+    console.log("Simulating transaction (no SOL will be spent)...");
+    const simulation = await pg.connection.simulateTransaction(transaction, {
+      commitment: "confirmed",
+      sigVerify: true,
+    });
+
+    if (simulation.value.err) {
+      console.error("SIMULATION FAILED:", JSON.stringify(simulation.value.err));
+      if (simulation.value.logs) {
+        for (const log of simulation.value.logs) console.error(log);
+      }
+      throw new Error("Simulation failed. Transaction was NOT submitted; no SOL was spent.");
+    }
+
+    console.log("SIMULATION PASSED.");
+    console.log("Estimated compute units:", simulation.value.unitsConsumed ?? "not reported");
+    console.log("Simulation logs:", simulation.value.logs ?? []);
+
+    const rentLamports = await pg.connection.getMinimumBalanceForRentExemption(679, "confirmed");
+    console.log("Approximate metadata rent (SOL):", rentLamports / 1_000_000_000);
+    console.log("Submitting the simulated transaction to Devnet...");
+
     const signature = await sendAndConfirmTransaction(
       pg.connection,
       transaction,
-      [wallet]
+      [wallet],
+      { commitment: "confirmed", preflightCommitment: "confirmed" }
     );
 
     console.log("TRANSACTION CONFIRMED:", signature);
-    console.log(
-      "Explorer:",
-      "https://explorer.solana.com/tx/" + signature + "?cluster=devnet"
-    );
-    console.log("Metadata account:", metadataPda.toBase58());
+    console.log("Explorer:", "https://explorer.solana.com/tx/" + signature + "?cluster=devnet");
 
-    const verified = await pg.connection.getAccountInfo(metadataPda);
-    if (!verified) throw new Error("Transaction confirmed, but metadata account verification failed.");
-    console.log("VERIFIED: S0lana metadata account exists on Devnet.");
+    const verified = await pg.connection.getAccountInfo(metadataPda, "confirmed");
+    if (!verified) {
+      throw new Error("Transaction confirmed, but metadata account verification failed.");
+    }
+    if (!verified.owner.equals(metadataProgram)) {
+      throw new Error("Metadata PDA exists but has an unexpected account owner.");
+    }
+
+    console.log("VERIFIED: Metadata PDA exists and is owned by Metaplex.");
+    console.log("Metadata account:", metadataPda.toBase58());
+    console.log("Metadata account data size:", verified.data.length);
+    console.log("S0lana metadata registration completed on Devnet.");
   } catch (error: any) {
     console.error("S0lana metadata registration stopped:", error?.message || error);
   }
