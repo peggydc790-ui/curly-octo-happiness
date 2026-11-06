@@ -143,4 +143,6 @@ async function main() {
   console.log("Metadata account:", metadataPda.toBase58());
 }
 
-await main();
+main().catch((error) => {
+  console.error("S0lana metadata registration stopped:", error);
+});
